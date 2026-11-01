@@ -18,6 +18,13 @@ namespace Instinct.Core.Memory
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public float GetStat(StatKey key) => _squadStats[(int)key - Offset];
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public void SetFlag(WorldFlag flag, bool value)
+        {
+            ulong bit = 1UL << (int)flag;
+            SharedWorldState = value ? (SharedWorldState | bit) : (SharedWorldState & ~bit);
+        }
+
         public ReadOnlySpan<float> AsSpan() => _squadStats;
     }
 }

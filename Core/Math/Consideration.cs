@@ -1,8 +1,10 @@
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using Instinct.Core.State;
 
 namespace Instinct.Core.Math
 {
+    [StructLayout(LayoutKind.Sequential)]
     public readonly struct Consideration
     {
         public readonly StatKey ParameterKey;

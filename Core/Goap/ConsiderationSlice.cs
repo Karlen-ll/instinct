@@ -5,9 +5,6 @@ using Instinct.Core.Math;
 
 namespace Instinct.Core.Goap
 {
-    /// <summary>
-    /// Дескриптор среза в общем пуле Consideration (Burst-совместимый, 3 байта).
-    /// </summary>
     [StructLayout(LayoutKind.Sequential)]
     public readonly struct ConsiderationSlice
     {

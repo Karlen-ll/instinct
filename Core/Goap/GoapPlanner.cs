@@ -23,43 +23,84 @@ namespace Instinct.Core.Goap
             ref PlannerWorkspace workspace,
             Span<ActionId> outPlanBuffer)
         {
-            GoalId bestGoalId = GoalId.None;
-            WorldStateMask bestGoalMask = default;
-            float highestUtility = 0f;
+            int goalsCount = goals.Length;
 
-            for (int i = 0; i < goals.Length; i++)
+            // TIP: rejectedGoalsMask — ulong, поэтому жёсткий потолок 64 цели.
+            // При G > 64 нужна Span<ulong> или пересмотр архитектуры (обычно 4-8 целей).
+            // Assert, а не молчаливое усечение — иначе цель №65 просто исчезнет.
+            System.Diagnostics.Debug.Assert(
+                goalsCount <= 64,
+                $"Instinct.Core: Number of goals ({goalsCount}) exceeds rejectedGoalsMask capacity (64).");
+
+            if (goalsCount > 64)
+                goalsCount = 64;
+
+            ulong rejectedGoalsMask = 0UL;
+            bool hasAttemptedAnyGoal = false;
+
+            while (true)
             {
-                ref readonly InstinctGoal goal = ref goals[i];
+                // 1. Найти следующую по полезности НЕотвергнутую и НЕдостигнутую цель
+                int bestGoalIndex = -1;
+                float highestUtility = 0f;
 
-                // Цель, уже достигнутая в текущем мире, не рассматривается
-                if (goal.DesiredState.IsSatisfiedBy(baseRequest.StartState))
-                    continue;
-
-                float utility = goal.CalculateUtility(
-                    baseRequest.ConsiderationPool,
-                    baseRequest.BlackboardStats);
-
-                if (utility > highestUtility)
+                for (int i = 0; i < goalsCount; i++)
                 {
-                    highestUtility = utility;
-                    bestGoalId = goal.Id;
-                    bestGoalMask = goal.DesiredState;
+                    if ((rejectedGoalsMask & (1UL << i)) != 0UL)
+                        continue;
+
+                    ref readonly InstinctGoal goal = ref goals[i];
+
+                    // Уже достигнутую цель планировать бессмысленно
+                    if (goal.DesiredState.IsSatisfiedBy(baseRequest.StartState))
+                        continue;
+
+                    float utility = goal.CalculateUtility(
+                        baseRequest.ConsiderationPool,
+                        baseRequest.BlackboardStats);
+
+                    if (utility > highestUtility)
+                    {
+                        highestUtility = utility;
+                        bestGoalIndex = i;
+                    }
                 }
+
+                // 2. Кандидатов не осталось
+                if (bestGoalIndex == -1)
+                {
+                    // TIP: Различаем "всё уже хорошо" и "ничего не достижимо" — статус нужен
+                    // для телеметрии и для backoff-логики на стороне InstinctAgent.
+                    return hasAttemptedAnyGoal
+                        ? new PlanResult(PlanStatus.NoPlanFound, GoalId.None, 0f, 0)
+                        : new PlanResult(PlanStatus.GoalAlreadySatisfied, GoalId.None, 0f, 0);
+                }
+
+                ref readonly InstinctGoal bestGoal = ref goals[bestGoalIndex];
+                hasAttemptedAnyGoal = true;
+
+                var specificRequest = new PlanRequest(
+                    baseRequest.StartState,
+                    bestGoal.DesiredState,
+                    baseRequest.Actions,
+                    baseRequest.ConsiderationPool,
+                    baseRequest.BlackboardStats,
+                    baseRequest.MaxDepth);
+
+                PlanResult result = TryBuildPlan(
+                    in specificRequest, bestGoal.Id, ref workspace, outPlanBuffer);
+
+                // 3. Всё, кроме NoPlanFound, финально:
+                //    • Success        — план найден
+                //    • BufferTooSmall — смена цели не увеличит буфер, менять её бессмысленно
+                //    • GoalAlreadySatisfied — недостижимо здесь (см. фильтр выше), но оставляем
+                //      для защиты, если кто-то вызовет TryBuildPlan напрямую
+                if (result.Status != PlanStatus.NoPlanFound)
+                    return result;
+
+                // 4. Цель недостижима в текущем мире — отвергаем и пробуем следующую
+                rejectedGoalsMask |= 1UL << bestGoalIndex;
             }
-
-            if (bestGoalId == GoalId.None)
-                return new PlanResult(PlanStatus.GoalAlreadySatisfied, GoalId.None, 0f, 0);
-
-            // Формируем «специфичный» запрос уже с выбранной целью
-            var specificRequest = new PlanRequest(
-                baseRequest.StartState,
-                bestGoalMask,
-                baseRequest.Actions,
-                baseRequest.ConsiderationPool,
-                baseRequest.BlackboardStats,
-                baseRequest.MaxDepth);
-
-            return TryBuildPlan(in specificRequest, bestGoalId, ref workspace, outPlanBuffer);
         }
 
         /// <summary>
@@ -77,9 +118,7 @@ namespace Instinct.Core.Goap
 
             workspace.Clear();
 
-            // 1. Предрасчёт динамических стоимостей действий (Utility-кривые).
-            //    float.PositiveInfinity = вето от UtilityEvaluator.
-            int actionCount = request.Actions.Length;
+            int actionCount = System.Math.Min(request.Actions.Length, workspace.ActionCosts.Length);
             for (int i = 0; i < actionCount; i++)
             {
                 workspace.ActionCosts[i] = request.Actions[i].CalculateProceduralCost(

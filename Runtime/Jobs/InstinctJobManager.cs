@@ -3,30 +3,28 @@ using System.Collections.Generic;
 using Instinct.Core.Goap;
 using Instinct.Core.Math;
 using Instinct.Core.Memory;
+using Instinct.Core.State;
 using Unity.Collections;
 using Unity.Jobs;
 using UnityEngine;
 
 namespace Instinct.Runtime.Jobs
 {
-    [DefaultExecutionOrder(-50)]
+    [DefaultExecutionOrder(50)]
     public sealed class InstinctJobManager : MonoBehaviour
     {
         public static InstinctJobManager Instance { get; private set; } = null!;
 
-        private const int MaxBatchSize = 128; // Максимум пересчетов плана за один кадр
+        private const int MaxBatchSize = 128;
         private const int MaxPlanDepth = 8;
         private const int StatCount = (int)StatKey.Count;
 
-        // Очередь агентов, запросивших пересчет в текущем кадре
-        private readonly List<InstinctAgent> _pendingAgents = new(MaxBatchSize);
+        private readonly List<InstinctAgent> _pendingAgents = new(MaxBatchSize * 2);
 
-        // Постоянные (Persistent) буферы базы знаний
         private NativeArray<InstinctGoal> _sharedGoals;
         private NativeArray<InstinctAction> _sharedActions;
         private NativeArray<Consideration> _sharedConsiderations;
 
-        // Постоянные буферы батча
         private NativeArray<AgentJobInput> _agentInputs;
         private NativeArray<float> _flattenedStats;
         private NativeArray<PlanResult> _results;
@@ -39,21 +37,23 @@ namespace Instinct.Runtime.Jobs
         {
             Instance = this;
 
-            // Выделяем неуправляемую память один раз при старте сцены
             _agentInputs = new NativeArray<AgentJobInput>(MaxBatchSize, Allocator.Persistent);
             _flattenedStats = new NativeArray<float>(MaxBatchSize * StatCount, Allocator.Persistent);
             _results = new NativeArray<PlanResult>(MaxBatchSize, Allocator.Persistent);
             _flattenedOutputPlans = new NativeArray<ActionId>(MaxBatchSize * MaxPlanDepth, Allocator.Persistent);
         }
 
-        /// <summary>
-        /// Загружает общую конфигурацию целей, действий и кривых в неуправляемую память.
-        /// </summary>
         public void InitializeSharedDatabase(
             ReadOnlySpan<InstinctGoal> goals,
             ReadOnlySpan<InstinctAction> actions,
             ReadOnlySpan<Consideration> considerations)
         {
+            _activeJobHandle.Complete();
+
+            if (_sharedGoals.IsCreated) _sharedGoals.Dispose();
+            if (_sharedActions.IsCreated) _sharedActions.Dispose();
+            if (_sharedConsiderations.IsCreated) _sharedConsiderations.Dispose();
+
             _sharedGoals = new NativeArray<InstinctGoal>(goals.Length, Allocator.Persistent);
             _sharedActions = new NativeArray<InstinctAction>(actions.Length, Allocator.Persistent);
             _sharedConsiderations = new NativeArray<Consideration>(considerations.Length, Allocator.Persistent);
@@ -63,25 +63,20 @@ namespace Instinct.Runtime.Jobs
             considerations.CopyTo(_sharedConsiderations.AsSpan());
         }
 
-        /// <summary>
-        /// Вызывается из InstinctAgent, когда подошел таймер перепланирования.
-        /// </summary>
         public void EnqueueAgent(InstinctAgent agent)
         {
-            if (_pendingAgents.Count < MaxBatchSize)
-            {
-                _pendingAgents.Add(agent);
-            }
+            _pendingAgents.Add(agent);
         }
 
         private void Update()
         {
-            _scheduledCount = _pendingAgents.Count;
-            if (_scheduledCount == 0) return;
+            if (_pendingAgents.Count == 0 || !_sharedGoals.IsCreated)
+                return;
 
+            // Берем не более MaxBatchSize агентов за один кадр; остальные перейдут на следующий кадр
+            _scheduledCount = Math.Min(_pendingAgents.Count, MaxBatchSize);
             Span<float> statsDestination = _flattenedStats.AsSpan();
 
-            // 1. Собираем актуальные данные сенсоров и упаковываем Blackboard в плоский буфер
             for (int i = 0; i < _scheduledCount; i++)
             {
                 InstinctAgent agent = _pendingAgents[i];
@@ -93,12 +88,10 @@ namespace Instinct.Runtime.Jobs
                     MaxDepth = MaxPlanDepth
                 };
 
-                // Быстрое копирование блока памяти (memmove) в нужный слот батча
                 Span<float> slot = statsDestination.Slice(i * StatCount, StatCount);
                 agent.Blackboard.AllStats.CopyTo(slot);
             }
 
-            // 2. Формируем и запускаем параллельный джоб
             var job = new GoapPlanningJob
             {
                 SharedGoals = _sharedGoals,
@@ -112,8 +105,6 @@ namespace Instinct.Runtime.Jobs
                 PlanStride = MaxPlanDepth
             };
 
-            // TIP: innerloopBatchCount = 4 распределяет по 4 агента на одну задачу воркера,
-            // балансируя накладные расходы планировщика потоков и загрузку ядер CPU
             _activeJobHandle = job.Schedule(_scheduledCount, innerloopBatchCount: 4);
             JobHandle.ScheduleBatchedJobs();
         }
@@ -122,21 +113,23 @@ namespace Instinct.Runtime.Jobs
         {
             if (_scheduledCount == 0) return;
 
-            // Дожидаемся завершения всех рабочих потоков в конце кадра
             _activeJobHandle.Complete();
 
             ReadOnlySpan<ActionId> allPlans = _flattenedOutputPlans.AsReadOnlySpan();
 
-            // Рассылаем готовые планы обратно агентам
             for (int i = 0; i < _scheduledCount; i++)
             {
-                PlanResult result = _results[i];
-                ReadOnlySpan<ActionId> planSlice = allPlans.Slice(i * MaxPlanDepth, result.PlanLength);
-
-                _pendingAgents[i].ApplyPlanResult(result, planSlice);
+                InstinctAgent agent = _pendingAgents[i];
+                if (agent != null && agent.isActiveAndEnabled)
+                {
+                    PlanResult result = _results[i];
+                    ReadOnlySpan<ActionId> planSlice = allPlans.Slice(i * MaxPlanDepth, result.PlanLength);
+                    agent.ApplyPlanResult(result, planSlice);
+                }
             }
 
-            _pendingAgents.Clear();
+            // Удаляем только обработанный батч, сохраняя хвост очереди на следующий кадр
+            _pendingAgents.RemoveRange(0, _scheduledCount);
             _scheduledCount = 0;
         }
 

@@ -19,8 +19,8 @@ namespace Instinct.Runtime
 
         private readonly AgentBlackboard _blackboard = new();
         private SquadBlackboard? _squadBlackboard;
-        private ISensor[] _sensors = Array.Empty<ISensor>();
 
+        private ISensor[] _sensors = Array.Empty<ISensor>();
         private readonly IActionExecutor?[] _executorLookup = new IActionExecutor?[MaxActionIdCapacity];
 
         private readonly ActionId[] _activePlan = new ActionId[MaxPlanDepth];
@@ -47,7 +47,7 @@ namespace Instinct.Runtime
                 _executorLookup[id] = executors[i];
             }
 
-            // TIP: Случайное смещение таймера распределяет пики нагрузки CPU по кадрам.
+            // TIP: Размазываем запросы в InstinctJobManager по разным кадрам
             _replanTimer = UnityEngine.Random.Range(0f, _replanInterval);
         }
 
@@ -58,29 +58,27 @@ namespace Instinct.Runtime
 
             if ((_replanTimer <= 0f || _currentExecutor == null) && !_isWaitingForPlan)
             {
-                if (InstinctJobManager.Instance != null)
-                {
-                    _replanTimer = _replanInterval;
-                    _isWaitingForPlan = true;
-                    InstinctJobManager.Instance.EnqueueAgent(this);
-                }
-                // TIP: Если менеджер ещё не инициализирован — не защёлкиваем флаг, попробуем позже.
+                _replanTimer = _replanInterval;
+                _isWaitingForPlan = true;
+                InstinctJobManager.Instance.EnqueueAgent(this);
             }
 
             TickActivePlan(dt);
         }
 
-        /// <summary>Вызывается менеджером в главном потоке перед упаковкой данных в NativeArray.</summary>
         public void PrepareSensorsAndSync()
         {
             if (_squadBlackboard != null)
+            {
                 _blackboard.SyncFromSquad(_squadBlackboard, _sharedSquadFlagsMask);
+            }
 
             for (int i = 0; i < _sensors.Length; i++)
+            {
                 _sensors[i].CollectData(_blackboard);
+            }
         }
 
-        /// <summary>Вызывается менеджером в LateUpdate после завершения GoapPlanningJob.</summary>
         public void ApplyPlanResult(PlanResult result, ReadOnlySpan<ActionId> newPlan)
         {
             _isWaitingForPlan = false;
@@ -92,22 +90,23 @@ namespace Instinct.Runtime
             }
 
             ActionId newFirstAction = newPlan[0];
-            bool isSameCurrentAction =
-                _currentExecutor != null && _currentExecutor.ActionId == newFirstAction;
+            bool isSameCurrentAction = _currentExecutor != null && _currentExecutor.ActionId == newFirstAction;
 
             newPlan.CopyTo(_activePlan);
             _activePlanLength = result.PlanLength;
             _currentGoalId = result.ActiveGoal;
             _currentStepIndex = 0;
 
-            // Бесшовное обновление: не дёргаем OnEnter/OnExit у того же действия.
             if (!isSameCurrentAction)
+            {
                 StartAction(newFirstAction);
+            }
         }
 
         private void TickActivePlan(float deltaTime)
         {
-            if (_currentExecutor == null) return;
+            if (_currentExecutor == null)
+                return;
 
             ExecutionStatus status = _currentExecutor.OnTick(_blackboard, deltaTime);
 
@@ -122,9 +121,13 @@ namespace Instinct.Runtime
                     _currentStepIndex++;
 
                     if (_currentStepIndex < _activePlanLength)
+                    {
                         StartAction(_activePlan[_currentStepIndex]);
+                    }
                     else
+                    {
                         _replanTimer = 0f;
+                    }
                     break;
 
                 case ExecutionStatus.Failed:

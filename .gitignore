@@ -1,1 +1,12 @@
-.idea
+node_modules/
+
+# IDE
+.vscode/
+.idea/
+.vs/
+
+# Other
+._*
+.DS_Store
+Thumbs.db
+Desktop.ini

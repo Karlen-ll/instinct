@@ -12,6 +12,7 @@ namespace Instinct.Runtime.Execution
         [SerializeField] private Transform _coverPoint = null!;
         [SerializeField] private float _arrivalThreshold = 0.5f;
 
+        public bool IsInterruptible => true;
         public ActionId ActionId => ActionId.TakeCover;
 
         public void OnEnter(AgentBlackboard blackboard)
@@ -30,6 +31,7 @@ namespace Instinct.Runtime.Execution
                 blackboard.SetFlag(WorldFlag.IsInCover, true);
                 return ExecutionStatus.Success;
             }
+
             return ExecutionStatus.Running;
         }
 

@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.CompilerServices;
 using Instinct.Core.Goap;
 using Instinct.Core.Memory;
 using Instinct.Runtime.Execution;
@@ -13,8 +14,9 @@ namespace Instinct.Runtime
         private const byte MaxPlanDepth = 8;
         private const int MaxActionIdCapacity = 16;
 
-        [Header("Планирование")]
+        [Header("Планирование и Инерция")]
         [SerializeField] private float _replanInterval = 0.25f;
+        [SerializeField] private float _minActionCommitmentTime = 0.4f;
         [SerializeField] private ulong _sharedSquadFlagsMask;
 
         private readonly AgentBlackboard _blackboard = new();
@@ -29,7 +31,9 @@ namespace Instinct.Runtime
         private byte _currentStepIndex;
         private GoalId _currentGoalId;
         private IActionExecutor? _currentExecutor;
+
         private float _replanTimer;
+        private float _actionCommitmentTimer;
         private bool _isWaitingForPlan;
 
         public AgentBlackboard Blackboard => _blackboard;
@@ -47,7 +51,6 @@ namespace Instinct.Runtime
                 _executorLookup[id] = executors[i];
             }
 
-            // TIP: Размазываем запросы в InstinctJobManager по разным кадрам
             _replanTimer = UnityEngine.Random.Range(0f, _replanInterval);
         }
 
@@ -56,7 +59,14 @@ namespace Instinct.Runtime
             float dt = Time.deltaTime;
             _replanTimer -= dt;
 
-            if ((_replanTimer <= 0f || _currentExecutor == null) && !_isWaitingForPlan)
+            if (_actionCommitmentTimer > 0f)
+            {
+                _actionCommitmentTimer -= dt;
+            }
+
+            if ((_replanTimer <= 0f || _currentExecutor == null)
+                && !_isWaitingForPlan
+                && CanInterruptCurrentAction())
             {
                 _replanTimer = _replanInterval;
                 _isWaitingForPlan = true;
@@ -64,6 +74,15 @@ namespace Instinct.Runtime
             }
 
             TickActivePlan(dt);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool CanInterruptCurrentAction()
+        {
+            if (_currentExecutor == null)
+                return true;
+
+            return _currentExecutor.IsInterruptible && _actionCommitmentTimer <= 0f;
         }
 
         public void PrepareSensorsAndSync()
@@ -82,6 +101,10 @@ namespace Instinct.Runtime
         public void ApplyPlanResult(PlanResult result, ReadOnlySpan<ActionId> newPlan)
         {
             _isWaitingForPlan = false;
+
+            // Защита на случай, если исполнитель вошел в непрерываемую фазу пока считался Job
+            if (_currentExecutor != null && !_currentExecutor.IsInterruptible)
+                return;
 
             if (result.Status != PlanStatus.Success || result.PlanLength == 0)
             {
@@ -126,6 +149,8 @@ namespace Instinct.Runtime
                     }
                     else
                     {
+                        // Цель достигнута — сбрасываем инерцию завершенной цели и ищем новую
+                        _currentGoalId = GoalId.None;
                         _replanTimer = 0f;
                     }
                     break;
@@ -149,6 +174,7 @@ namespace Instinct.Runtime
             }
 
             _currentExecutor = nextExecutor;
+            _actionCommitmentTimer = _minActionCommitmentTime;
             _currentExecutor.OnEnter(_blackboard);
         }
 
@@ -163,6 +189,7 @@ namespace Instinct.Runtime
             _activePlanLength = 0;
             _currentStepIndex = 0;
             _currentGoalId = GoalId.None;
+            _actionCommitmentTimer = 0f;
         }
     }
 }

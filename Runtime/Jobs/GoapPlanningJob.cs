@@ -13,6 +13,7 @@ namespace Instinct.Runtime.Jobs
     public struct AgentJobInput
     {
         public ulong StartWorldState;
+        public GoalId CurrentGoal;
         public byte MaxDepth;
     }
 
@@ -72,6 +73,7 @@ namespace Instinct.Runtime.Jobs
                 actions: SharedActions.AsReadOnlySpan(),
                 considerationPool: SharedConsiderations.AsReadOnlySpan(),
                 blackboardStats: agentStats,
+                currentGoal: input.CurrentGoal,
                 maxDepth: input.MaxDepth
             );
 

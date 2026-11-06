@@ -11,6 +11,7 @@ namespace Instinct.Core.Goap
     {
         public readonly GoalId Id;
         public readonly float BaseWeight;
+        public readonly float CommitmentBonus;
         public readonly WorldStateMask DesiredState;
         public readonly ConsiderationSlice Considerations;
 
@@ -18,21 +19,32 @@ namespace Instinct.Core.Goap
             GoalId id,
             WorldStateMask desiredState,
             ConsiderationSlice considerations,
-            float baseWeight = 1f)
+            float baseWeight = 1f,
+            float commitmentBonus = 0.15f)
         {
             Id = id;
             DesiredState = desiredState;
             Considerations = considerations;
             BaseWeight = baseWeight;
+            CommitmentBonus = commitmentBonus;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public float CalculateUtility(
             ReadOnlySpan<Consideration> considerationPool,
-            ReadOnlySpan<float> blackboardStats)
+            ReadOnlySpan<float> blackboardStats,
+            GoalId currentActiveGoal = GoalId.None)
         {
             ReadOnlySpan<Consideration> slice = Considerations.Resolve(considerationPool);
-            return UtilityEvaluator.Evaluate(slice, blackboardStats, BaseWeight);
+            float utility = UtilityEvaluator.Evaluate(slice, blackboardStats, BaseWeight);
+
+            // TIP: Если сработало вето (utility == 0), инерция игнорируется — цель удерживать нельзя
+            if (utility > 0f && Id == currentActiveGoal)
+            {
+                utility += CommitmentBonus;
+            }
+
+            return utility;
         }
     }
 }

@@ -11,6 +11,7 @@ namespace Instinct.Core.Goap
         public readonly ReadOnlySpan<InstinctAction> Actions;
         public readonly ReadOnlySpan<Consideration> ConsiderationPool;
         public readonly ReadOnlySpan<float> BlackboardStats;
+        public readonly GoalId CurrentGoal;
         public readonly byte MaxDepth;
 
         public PlanRequest(
@@ -19,6 +20,7 @@ namespace Instinct.Core.Goap
             ReadOnlySpan<InstinctAction> actions,
             ReadOnlySpan<Consideration> considerationPool,
             ReadOnlySpan<float> blackboardStats,
+            GoalId currentGoal = GoalId.None,
             byte maxDepth = 8)
         {
             StartState = startState;
@@ -26,6 +28,7 @@ namespace Instinct.Core.Goap
             Actions = actions;
             ConsiderationPool = considerationPool;
             BlackboardStats = blackboardStats;
+            CurrentGoal = currentGoal;
             MaxDepth = maxDepth;
         }
     }

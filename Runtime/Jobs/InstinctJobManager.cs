@@ -85,6 +85,7 @@ namespace Instinct.Runtime.Jobs
                 _agentInputs[i] = new AgentJobInput
                 {
                     StartWorldState = agent.Blackboard.LocalWorldState,
+                    CurrentGoal = agent.CurrentGoal,
                     MaxDepth = MaxPlanDepth
                 };
 

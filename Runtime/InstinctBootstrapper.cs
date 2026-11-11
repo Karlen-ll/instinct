@@ -3,6 +3,7 @@ using Instinct.Core.Math;
 using Instinct.Core.Memory;
 using Instinct.Core.State;
 using Instinct.Runtime.Jobs;
+using Instinct.Runtime.Profiles;
 using UnityEngine;
 
 namespace Instinct.Runtime
@@ -10,6 +11,7 @@ namespace Instinct.Runtime
     [DefaultExecutionOrder(-100)]
     public sealed class InstinctBootstrapper : MonoBehaviour
     {
+        [SerializeField] private InstinctProfileSO? _archetypeProfile;
         [SerializeField] private InstinctAgent[] _squadAgents = null!;
 
         private SquadBlackboard _squadBlackboard = null!;
@@ -20,7 +22,22 @@ namespace Instinct.Runtime
             InitializeSquadAndAgents();
         }
 
-        private static void InitializeDatabase()
+        private void InitializeDatabase()
+        {
+            if (_archetypeProfile != null)
+            {
+                BakedProfile baked = ProfileMerger.Bake(_archetypeProfile);
+                InstinctJobManager.Instance.InitializeSharedDatabase(
+                    baked.Goals,
+                    baked.Actions,
+                    baked.ConsiderationPool);
+                return;
+            }
+
+            InitializeFallbackDatabase();
+        }
+
+        private static void InitializeFallbackDatabase()
         {
             // 1. Плоский пул всех кривых (ConsiderationPool)
             // Индексы жестко привязаны к ConsiderationSlice в целях и действиях
